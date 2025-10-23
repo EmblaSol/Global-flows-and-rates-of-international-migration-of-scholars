@@ -1,0 +1,319 @@
+---
+title: "Flows of Norwegian scholars"
+execute:
+  warning: false
+  message: false
+format:
+  html:
+    embed-resources: true
+    code-fold: true
+    code-tools: true
+---
+
+```{r}
+#| echo: false
+library(sf)
+library(spData)
+library(countrycode)
+library(flowmapblue)
+library(flowmapper)
+library(tidyverse)
+library(shiny)
+
+#getwd()
+#max(scopus_country_flows$year)
+```
+
+```{r}
+#| code-summary: "Show the code"
+scopus_country_flows <- read.csv("data_processed/scopus_2024_V1_scholarlymigration_countryflows_enriched.csv")
+countries <- spData::world
+#glimpse(countries)
+```
+
+People are from many places in the world.
+```{r}
+#| code-fold: true
+#| code-summary: "Show the code"
+ggplot() +
+  geom_sf(data = countries) +
+  geom_sf(data = st_point_on_surface(countries), color = "darkred")
+```
+
+The author of this article was born here.
+```{r}
+#| code-summary: "Show the code"
+oslo <- st_sfc(st_point(c(10.7522, 59.9139)), crs = st_crs(countries))
+ggplot() +
+  geom_sf(data = countries) +
+  geom_sf(data = oslo,
+          color = "darkred", size = 1)
+```
+
+And has lived here (for various amounts of time):
+```{r}
+#| code-summary: "Show the code"
+cities <- data.frame(
+  name = c("Grenoble", "Trondheim", "Paris", "Lima", "Rostock"),
+  lon = c(5.7245, 10.3951, 2.3522, -77.0428, 12.1308),
+  lat = c(45.1885, 63.4305, 48.8566, -12.0464, 54.0887)
+)
+
+# Create Oslo point
+oslo <- data.frame(
+  name = "Oslo",
+  lon = 10.7522,
+  lat = 59.9139
+)
+
+# Convert to sf objects
+cities_sf <- st_as_sf(cities, coords = c("lon", "lat"), crs = st_crs(countries))
+oslo_sf <- st_as_sf(oslo, coords = c("lon", "lat"), crs = st_crs(countries))
+
+# Plot
+ggplot() +
+  geom_sf(data = countries) +
+  geom_sf(data = cities_sf, color = "darkgreen", size = 1) +
+  geom_sf(data = oslo_sf, color = "darkred", size = 1)
+```
+
+Migration is a common phenomenon. This (short) article tries to describe the migration of Norwegian scholars (an undoubtedly) interesting group. Please note that the authors of this article (for who knows what reason) is not a part of this group. 
+
+```{r}
+#| code-summary: "Show the code"
+countries_centroids <- countries |> 
+  st_centroid() |> # finds a center of each country'spolygon
+  st_coordinates() |>  # extracts numeric coorindates from the POINT geometry
+  as.data.frame() |> # converts the matrix to a data.frame 
+  setNames(c("lon", "lat")) |> # renames the columns
+  cbind(countries) |> # adds back all the columns (except for geometry) form `countries`
+  select(iso_a2, lon, lat, name_long) # only selects a few columns that we really need
+#glimpse(countries_centroids)
+```
+
+```{r}
+#| code-summary: "Show the code"
+# Aggregate flows across all years (1998-2018)
+flows_aggregated <- scopus_country_flows %>%
+  group_by(countrynamefrom, countrynameto, iso3codefrom, iso3codeto) %>%
+  summarise(
+    total_migrations = sum(n_migrations, na.rm = TRUE),
+    .groups = 'drop'
+  )
+
+# Filter for flows FROM Norway
+norway_flows <- flows_aggregated %>%
+  filter(countrynamefrom == "Norway")
+
+# Join with centroids to get origin coordinates
+# Note: countries_centroids uses iso_a2 (2-letter codes) but flows use iso3code (3-letter)
+# We'll need to convert or join differently
+norway_flows <- norway_flows %>%
+  left_join(
+    countries_centroids %>% select(name_long, lon, lat),
+    by = c("countrynamefrom" = "name_long")
+  ) %>%
+  rename(origin_lon = lon, origin_lat = lat)
+
+# Join with centroids to get destination coordinates
+norway_flows <- norway_flows %>%
+  left_join(
+    countries_centroids %>% select(name_long, lon, lat),
+    by = c("countrynameto" = "name_long")
+  ) %>%
+  rename(dest_lon = lon, dest_lat = lat)
+
+# Remove any rows with missing coordinates
+norway_flows <- norway_flows %>%
+  filter(!is.na(origin_lon) & !is.na(dest_lon))
+
+#glimpse(norway_flows)
+```
+
+```{r}
+#| code-summary: "Show the code"
+base_plot <- ggplot() +
+  geom_sf(data = countries, fill = "white", col = "grey80", linewidth = 0.1) +
+  theme_void(base_size = 14) +
+  labs(
+    title = "Migration flows from Norway (1998-2018)", 
+    fill = "Total Migrations"
+  ) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5, margin = margin(b = 10)),
+    plot.background = element_rect(fill = "white", color = NA),
+    legend.position = "right"
+  )
+
+od_norway <- norway_flows %>%
+  select(
+    o = countrynamefrom,      # origin
+    d = countrynameto,         # destination  
+    value = total_migrations   # flow value
+  ) %>%
+  mutate(
+    o = as.character(o),
+    d = as.character(d)
+  )
+
+# Prepare nodes data - columns needed: name, x, y
+nodes_data <- countries_centroids %>%
+  select(
+    name = name_long,   # This was the issue - needs to be 'name' not 'id'
+    x = lon,
+    y = lat
+  ) %>%
+  mutate(name = as.character(name))
+
+# Create base plot
+base_plot <- ggplot() +
+  geom_sf(data = countries, fill = NA, col = "grey60", linewidth = 0.05) +
+  theme_classic(base_size = 20) +
+  labs(title = "Migration Flows from Norway (1998-2018)", 
+       subtitle = "", 
+       fill = "") +
+  theme(
+    axis.line = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    panel.background = element_rect(fill = "transparent"),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  ) +
+  guides(fill = "none")
+
+# Add flowmap
+flows_plot <- base_plot %>%
+  add_flowmap(
+    od = od_norway,
+    nodes = nodes_data,
+    node_radius_factor = 1,        
+    edge_width_factor = 1,      
+    arrow_point_angle = 50,          
+    node_buffer_factor = 1.5,       
+    outline_col = "grey80",
+    add_legend = "right",    
+    legend_col = "gray20",
+    legend_gradient = TRUE,
+    k_nodes = 15                  
+  )
+
+# Better color gradient
+flows_plot <- flows_plot +
+  scale_fill_gradient(
+    low = "#FABB29", 
+    high = "#AB061F",
+    labels = scales::comma_format()
+  ) 
+
+flows_plot
+```
+
+As you can see people, basically just go to the US and the UK and the migration is not that high (BUT IT EXISTS). Let’s add immigration as well. 
+
+```{r}
+#| code-summary: "Show the code"
+# Aggregate flows TO Norway
+flows_to_norway <- scopus_country_flows %>%
+  group_by(countrynamefrom, countrynameto, iso3codefrom, iso3codeto) %>%
+  summarise(
+    total_migrations = sum(n_migrations, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  filter(countrynameto == "Norway")
+
+# Join with centroids for TO Norway flows
+flows_to_norway <- flows_to_norway %>%
+  left_join(
+    countries_centroids %>% select(name_long, lon, lat),
+    by = c("countrynamefrom" = "name_long")
+  ) %>%
+  rename(origin_lon = lon, origin_lat = lat) %>%
+  left_join(
+    countries_centroids %>% select(name_long, lon, lat),
+    by = c("countrynameto" = "name_long")
+  ) %>%
+  rename(dest_lon = lon, dest_lat = lat) %>%
+  filter(!is.na(origin_lon) & !is.na(dest_lon))
+
+# Prepare OD data for TO Norway
+od_to_norway <- flows_to_norway %>%
+  select(
+    o = countrynamefrom,
+    d = countrynameto,
+    value = total_migrations
+  ) %>%
+  mutate(
+    o = as.character(o),
+    d = as.character(d)
+  )
+
+# Create base plot
+base_plot <- ggplot() +
+  geom_sf(data = countries, fill = NA, col = "grey60", linewidth = 0.05) +
+  theme_classic(base_size = 20) +
+  labs(title = "Migration Flows from and to Norway (1998-2018)",
+       fill = "") +
+  theme(
+    axis.line = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    panel.background = element_rect(fill = "transparent"),
+    plot.background = element_rect(fill = "transparent", color = NA),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.subtitle = element_text(hjust = 0.5, size = 14)
+  ) +
+  guides(fill = "none")
+
+# Add flowmap for FROM Norway (red/orange)
+flows_plot <- base_plot %>%
+  add_flowmap(
+    od = od_norway,
+    nodes = nodes_data,
+    node_radius_factor = 1,        
+    edge_width_factor = 1,      
+    arrow_point_angle = 50,          
+    node_buffer_factor = 1.5,       
+    outline_col = "grey80",
+    add_legend = "none",
+    k_nodes = 15                  
+  )
+
+flows_plot <- flows_plot +
+  scale_fill_gradient(
+    low = "#FABB29", 
+    high = "#AB061F",
+    labels = scales::comma_format()
+  )
+
+# Add flowmap for TO Norway (blue)
+flows_plot <- flows_plot %>%
+  add_flowmap(
+    od = od_to_norway,
+    nodes = nodes_data,
+    node_radius_factor = 1,        
+    edge_width_factor = 1,      
+    arrow_point_angle = 50,          
+    node_buffer_factor = 1.5,       
+    outline_col = "grey80",
+    add_legend = "bottom",
+    legend_col = "gray20",
+    legend_gradient = TRUE,
+    k_nodes = 15                  
+  )
+
+flows_plot <- flows_plot +
+  scale_fill_gradient(
+    low = "#9ECAE1",  # Light blue
+    high = "#08519C",  # Dark blue
+    labels = scales::comma_format()
+  )
+
+flows_plot
+```
+
+Yes, you are probably completely blown away right now. Thank you so much.
