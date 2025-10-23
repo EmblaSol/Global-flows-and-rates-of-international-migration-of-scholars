@@ -12,6 +12,7 @@ format:
 
 ```{r}
 #| echo: false
+library(here)
 library(sf)
 library(spData)
 library(countrycode)
@@ -20,15 +21,16 @@ library(flowmapper)
 library(tidyverse)
 library(shiny)
 
-#getwd()
+getwd()
 #max(scopus_country_flows$year)
+
 ```
 
 ```{r}
 #| code-summary: "Show the code"
+setwd("/Users/emblavesterdal/Global-flows-and-rates-of-international-migration-of-scholars")
 scopus_country_flows <- read.csv("data_processed/scopus_2024_V1_scholarlymigration_countryflows_enriched.csv")
 countries <- spData::world
-#glimpse(countries)
 ```
 
 People are from many places in the world.
