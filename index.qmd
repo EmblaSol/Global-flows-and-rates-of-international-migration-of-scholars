@@ -256,7 +256,7 @@ od_to_norway <- flows_to_norway %>%
 base_plot <- ggplot() +
   geom_sf(data = countries, fill = NA, col = "grey60", linewidth = 0.05) +
   theme_classic(base_size = 20) +
-  labs(title = "Migration Flows from and to Norway (1998-2018)",
+  labs(title = "Flows from and to Norway (1998-2018)",
        fill = "") +
   theme(
     axis.line = element_blank(),
